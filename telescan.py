@@ -1,9 +1,11 @@
-import time, sys
+import time, sys, os, json
+from datetime import datetime
 
 from colorama import init, Fore, Style
-from pyrogram import Client
+from pyrogram import Client, types
 from pyrogram.errors import BadRequest, FloodWait, UnknownError
-from tqdm import tqdm
+from tqdm import tqdm, trange
+
 
 cFile = sys.argv[1]
 app = Client(
@@ -40,7 +42,7 @@ def chatListPrint(data):
     _username = data['username']
     print("[id] {} | Title: {} | Username: {} | Type: {} | DC: {}".format(_id, _title, _username, _type, _dc))
 
-def singleUserLookup(user, highlight=True):
+def singleUserLookup(user, highlight=True, filter_phone=False, filter_usrname=False):
     _id = user['user']['id']
     _contact = user['user']['is_contact']
     _first_name = user['user']['first_name']
@@ -60,8 +62,6 @@ def singleUserLookup(user, highlight=True):
     print((Fore.GREEN if _phone else '') + f"|-> Phone: {_phone}" + Style.RESET_ALL)
     print(f"|-> DC: {_dc}")
     print(f"|-> Last Online Date: {_lod}", end='')
-
-
 
 def chatMembersInfoPrint(data, total=True, highlight=True):
     if total:
@@ -91,6 +91,49 @@ def chatMembersInfoPrint(data, total=True, highlight=True):
             _invitedByUsername = ""
         print("|-> Status: {}\n|-> Join date: {}".format(_status, _date))
         print("|-> Invited by id: {} | username: {} | Full name: {}".format(_invitedByID, _invitedByUsername, _invitedByFullName))
+
+def dumpMembersInfo(data, chatId, chatName):
+    dumpDT = datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S")
+
+    userList = []
+
+    for user in data:
+        _lod = user['user']['last_online_date']
+        if _lod:
+            _lod = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(_lod))
+        _invite_user = None
+        if user['invited_by']:
+            _invite_user = {
+                'id':user['invited_by']['id'],
+                'username':user['invited_by']['username'],
+                'first_name':user['invited_by']['first_name'],
+                'last_name':user['invited_by']['last_name'],
+                }
+        _user = {
+            'id':user['user']['id'],
+            'username':user['user']['username'],
+            'first_name':user['user']['first_name'],
+            'last_name':user['user']['last_name'],
+            'phone_number':user['user']['phone_number'],
+            'dc_id':user['user']['dc_id'],
+            'is_bot':user['user']['is_bot'],
+            'last_online_date':_lod,
+            }
+        if _invite_user:
+            _user['invited_by'] = _invite_user
+
+        userList.append(_user)
+
+    if not os.path.exists('./dump/'):
+        os.makedirs('./dump/')
+    with open(f'./dump/{chatName}({chatId})_{dumpDT}.json', 'wt') as dumpFile:
+        json.dump(userList, dumpFile, indent=4, ensure_ascii=False)
+
+def filterUsersByPhone(users):
+    return filter(lambda user:user['user']['phone_number'], users)
+
+def filterUsersByUsername(users):
+    return filter(lambda user:user['user']['username'], users)
 
 
 with app:
@@ -148,10 +191,15 @@ with app:
         elif choice == "4":
             print(Fore.CYAN + "[chat_link or name]: " + Style.RESET_ALL)
             chatName = input()
-            print(Fore.CYAN + "[# of users]: " + Style.RESET_ALL)
-            limit = input()
             chatData = app.get_chat(chatName)
-            members = app.get_chat_members(chat_id=chatData.id, limit=int(limit))
+            membersCount = app.get_chat_members_count(chat_id=chatData.id)
+            members = types.list.List()
+            for offset in trange(0, membersCount, 200):
+                members += app.get_chat_members(chat_id=chatData.id, limit=200, offset=offset)
+            # members = app.iter_chat_members(chat_id=chatData.id)
+            dumpMembersInfo(members, chatData.id, chatName)
+            members = filterUsersByPhone(members)
+            members = list(members)
             chatMembersInfoPrint(members)
         else:
             print(Fore.RED + "\n[x] exiting!" + Style.RESET_ALL)
